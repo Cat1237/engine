@@ -7,6 +7,7 @@
 #include "flutter/shell/platform/darwin/ios/framework/Source/FlutterDartProject_Internal.h"
 
 #include "flutter/common/task_runners.h"
+#include "flutter/fml/mapping.h"
 #include "flutter/fml/message_loop.h"
 #include "flutter/fml/platform/darwin/scoped_nsobject.h"
 #include "flutter/runtime/dart_vm.h"
@@ -25,8 +26,8 @@ extern const intptr_t kPlatformStrongDillSize;
 
 static const char* kApplicationKernelSnapshotFileName = "kernel_blob.bin";
 
-static blink::Settings DefaultSettingsForProcess(NSBundle* bundle = nil) {
-  auto command_line = shell::CommandLineFromNSProcessInfo();
+static flutter::Settings DefaultSettingsForProcess(NSBundle* bundle = nil) {
+  auto command_line = flutter::CommandLineFromNSProcessInfo();
 
   // Precedence:
   // 1. Settings from the specified NSBundle.
@@ -45,7 +46,7 @@ static blink::Settings DefaultSettingsForProcess(NSBundle* bundle = nil) {
     bundle = mainBundle;
   }
 
-  auto settings = shell::SettingsFromCommandLine(command_line);
+  auto settings = flutter::SettingsFromCommandLine(command_line);
 
   settings.task_observer_add = [](intptr_t key, fml::closure callback) {
     fml::MessageLoop::GetCurrent().AddTaskObserver(key, std::move(callback));
@@ -66,11 +67,11 @@ static blink::Settings DefaultSettingsForProcess(NSBundle* bundle = nil) {
     }
   }
 
-  if (blink::DartVM::IsRunningPrecompiledCode()) {
+  if (flutter::DartVM::IsRunningPrecompiledCode()) {
     if (hasExplicitBundle) {
       NSString* executablePath = bundle.executablePath;
       if ([[NSFileManager defaultManager] fileExistsAtPath:executablePath]) {
-        settings.application_library_path = executablePath.UTF8String;
+        settings.application_library_path.push_back(executablePath.UTF8String);
       }
     }
 
@@ -81,7 +82,7 @@ static blink::Settings DefaultSettingsForProcess(NSBundle* bundle = nil) {
       if (libraryPath.length > 0) {
         NSString* executablePath = [NSBundle bundleWithPath:libraryPath].executablePath;
         if (executablePath.length > 0) {
-          settings.application_library_path = executablePath.UTF8String;
+          settings.application_library_path.push_back(executablePath.UTF8String);
         }
       }
     }
@@ -95,7 +96,7 @@ static blink::Settings DefaultSettingsForProcess(NSBundle* bundle = nil) {
         NSString* executablePath =
             [NSBundle bundleWithPath:applicationFrameworkPath].executablePath;
         if (executablePath.length > 0) {
-          settings.application_library_path = executablePath.UTF8String;
+          settings.application_library_path.push_back(executablePath.UTF8String);
         }
       }
     }
@@ -118,7 +119,7 @@ static blink::Settings DefaultSettingsForProcess(NSBundle* bundle = nil) {
       // Check if there is an application kernel snapshot in the assets directory we could
       // potentially use.  Looking for the snapshot makes sense only if we have a VM that can use
       // it.
-      if (!blink::DartVM::IsRunningPrecompiledCode()) {
+      if (!flutter::DartVM::IsRunningPrecompiledCode()) {
         NSURL* applicationKernelSnapshotURL =
             [NSURL URLWithString:@(kApplicationKernelSnapshotFileName)
                    relativeToURL:[NSURL fileURLWithPath:assetsPath]];
@@ -146,8 +147,7 @@ static blink::Settings DefaultSettingsForProcess(NSBundle* bundle = nil) {
 }
 
 @implementation FlutterDartProject {
-  fml::scoped_nsobject<NSBundle> _precompiledDartBundle;
-  blink::Settings _settings;
+  flutter::Settings _settings;
 }
 
 #pragma mark - Override base class designated initializers
@@ -158,11 +158,10 @@ static blink::Settings DefaultSettingsForProcess(NSBundle* bundle = nil) {
 
 #pragma mark - Designated initializers
 
-- (instancetype)initWithPrecompiledDartBundle:(NSBundle*)bundle {
+- (instancetype)initWithPrecompiledDartBundle:(nullable NSBundle*)bundle {
   self = [super init];
 
   if (self) {
-    _precompiledDartBundle.reset([bundle retain]);
     _settings = DefaultSettingsForProcess(bundle);
   }
 
@@ -171,21 +170,21 @@ static blink::Settings DefaultSettingsForProcess(NSBundle* bundle = nil) {
 
 #pragma mark - Settings accessors
 
-- (const blink::Settings&)settings {
+- (const flutter::Settings&)settings {
   return _settings;
 }
 
-- (shell::RunConfiguration)runConfiguration {
+- (flutter::RunConfiguration)runConfiguration {
   return [self runConfigurationForEntrypoint:nil];
 }
 
-- (shell::RunConfiguration)runConfigurationForEntrypoint:(NSString*)entrypointOrNil {
+- (flutter::RunConfiguration)runConfigurationForEntrypoint:(nullable NSString*)entrypointOrNil {
   return [self runConfigurationForEntrypoint:entrypointOrNil libraryOrNil:nil];
 }
 
-- (shell::RunConfiguration)runConfigurationForEntrypoint:(NSString*)entrypointOrNil
-                                            libraryOrNil:(NSString*)dartLibraryOrNil {
-  shell::RunConfiguration config = shell::RunConfiguration::InferFromSettings(_settings);
+- (flutter::RunConfiguration)runConfigurationForEntrypoint:(nullable NSString*)entrypointOrNil
+                                              libraryOrNil:(nullable NSString*)dartLibraryOrNil {
+  auto config = flutter::RunConfiguration::InferFromSettings(_settings);
   if (dartLibraryOrNil && entrypointOrNil) {
     config.SetEntrypointAndLibrary(std::string([entrypointOrNil UTF8String]),
                                    std::string([dartLibraryOrNil UTF8String]));
@@ -199,6 +198,12 @@ static blink::Settings DefaultSettingsForProcess(NSBundle* bundle = nil) {
 #pragma mark - Assets-related utilities
 
 + (NSString*)flutterAssetsName:(NSBundle*)bundle {
+  if (bundle == nil) {
+    bundle = [NSBundle bundleWithIdentifier:[FlutterDartProject defaultBundleIdentifier]];
+  }
+  if (bundle == nil) {
+    bundle = [NSBundle mainBundle];
+  }
   NSString* flutterAssetsName = [bundle objectForInfoDictionaryKey:@"FLTAssetsPath"];
   if (flutterAssetsName == nil) {
     flutterAssetsName = @"Frameworks/App.framework/flutter_assets";
@@ -207,16 +212,45 @@ static blink::Settings DefaultSettingsForProcess(NSBundle* bundle = nil) {
 }
 
 + (NSString*)lookupKeyForAsset:(NSString*)asset {
-  NSString* flutterAssetsName = [FlutterDartProject flutterAssetsName:[NSBundle mainBundle]];
+  return [self lookupKeyForAsset:asset fromBundle:nil];
+}
+
++ (NSString*)lookupKeyForAsset:(NSString*)asset fromBundle:(nullable NSBundle*)bundle {
+  NSString* flutterAssetsName = [FlutterDartProject flutterAssetsName:bundle];
   return [NSString stringWithFormat:@"%@/%@", flutterAssetsName, asset];
 }
 
 + (NSString*)lookupKeyForAsset:(NSString*)asset fromPackage:(NSString*)package {
-  return [self lookupKeyForAsset:[NSString stringWithFormat:@"packages/%@/%@", package, asset]];
+  return [self lookupKeyForAsset:asset fromPackage:package fromBundle:nil];
+}
+
++ (NSString*)lookupKeyForAsset:(NSString*)asset
+                   fromPackage:(NSString*)package
+                    fromBundle:(nullable NSBundle*)bundle {
+  return [self lookupKeyForAsset:[NSString stringWithFormat:@"packages/%@/%@", package, asset]
+                      fromBundle:bundle];
 }
 
 + (NSString*)defaultBundleIdentifier {
   return @"io.flutter.flutter.app";
+}
+
+#pragma mark - Settings utilities
+
+- (void)setPersistentIsolateData:(NSData*)data {
+  if (data == nil) {
+    return;
+  }
+
+  NSData* persistent_isolate_data = [data copy];
+  fml::NonOwnedMapping::ReleaseProc data_release_proc = [persistent_isolate_data](auto, auto) {
+    [persistent_isolate_data release];
+  };
+  _settings.persistent_isolate_data = std::make_shared<fml::NonOwnedMapping>(
+      static_cast<const uint8_t*>(persistent_isolate_data.bytes),  // bytes
+      persistent_isolate_data.length,                              // byte length
+      data_release_proc                                            // release proc
+  );
 }
 
 @end

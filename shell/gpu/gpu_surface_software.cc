@@ -7,26 +7,34 @@
 #include <memory>
 #include "flutter/fml/logging.h"
 
-namespace shell {
+namespace flutter {
 
-flow::ExternalViewEmbedder*
-GPUSurfaceSoftwareDelegate::GetExternalViewEmbedder() {
-  return nullptr;
-}
-
-GPUSurfaceSoftware::GPUSurfaceSoftware(GPUSurfaceSoftwareDelegate* delegate)
-    : delegate_(delegate), weak_factory_(this) {}
+GPUSurfaceSoftware::GPUSurfaceSoftware(GPUSurfaceSoftwareDelegate* delegate,
+                                       bool render_to_surface)
+    : delegate_(delegate),
+      render_to_surface_(render_to_surface),
+      weak_factory_(this) {}
 
 GPUSurfaceSoftware::~GPUSurfaceSoftware() = default;
 
-// |shell::Surface|
+// |Surface|
 bool GPUSurfaceSoftware::IsValid() {
   return delegate_ != nullptr;
 }
 
-// |shell::Surface|
+// |Surface|
 std::unique_ptr<SurfaceFrame> GPUSurfaceSoftware::AcquireFrame(
-    const SkISize& logical_size) {
+    const SkISize& logical_size,
+    const bool needs_readback) {
+  // TODO(38466): Refactor GPU surface APIs take into account the fact that an
+  // external view embedder may want to render to the root surface.
+  if (!render_to_surface_) {
+    return std::make_unique<SurfaceFrame>(
+        nullptr, [](const SurfaceFrame& surface_frame, SkCanvas* canvas) {
+          return true;
+        });
+  }
+
   if (!IsValid()) {
     return nullptr;
   }
@@ -65,7 +73,7 @@ std::unique_ptr<SurfaceFrame> GPUSurfaceSoftware::AcquireFrame(
   return std::make_unique<SurfaceFrame>(backing_store, on_submit);
 }
 
-// |shell::Surface|
+// |Surface|
 SkMatrix GPUSurfaceSoftware::GetRootTransformation() const {
   // This backend does not currently support root surface transformations. Just
   // return identity.
@@ -74,15 +82,15 @@ SkMatrix GPUSurfaceSoftware::GetRootTransformation() const {
   return matrix;
 }
 
-// |shell::Surface|
+// |Surface|
 GrContext* GPUSurfaceSoftware::GetContext() {
   // There is no GrContext associated with a software surface.
   return nullptr;
 }
 
-// |shell::Surface|
-flow::ExternalViewEmbedder* GPUSurfaceSoftware::GetExternalViewEmbedder() {
+// |Surface|
+flutter::ExternalViewEmbedder* GPUSurfaceSoftware::GetExternalViewEmbedder() {
   return delegate_->GetExternalViewEmbedder();
 }
 
-}  // namespace shell
+}  // namespace flutter

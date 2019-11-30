@@ -42,7 +42,7 @@ fi;
 
 BASE_SHA="$(git fetch $UPSTREAM master > /dev/null 2>&1 && \
            (git merge-base --fork-point FETCH_HEAD HEAD || git merge-base FETCH_HEAD HEAD))"
-FILES_TO_CHECK="$(git diff $DIFF_OPTS $BASE_SHA..HEAD -- $FILETYPES)"
+FILES_TO_CHECK="$(git diff $DIFF_OPTS $BASE_SHA -- $FILETYPES)"
 
 FAILED_CHECKS=0
 for f in $FILES_TO_CHECK; do
@@ -57,7 +57,7 @@ done
 
 if [[ $FAILED_CHECKS -ne 0 ]]; then
   echo ""
-  echo "ERROR: Some files are formatted incorrectly. To fix, apply diffs above via patch -p0."
+  echo "ERROR: Some files are formatted incorrectly. To fix, run \`./ci/format.sh | patch -p0\` from the flutter/engine/src/flutter directory."
   exit 1
 fi
 
@@ -73,3 +73,6 @@ if [[ ! -z "$TRAILING_SPACES" ]]; then
   echo "ERROR: Some files have trailing spaces. To fix, try something like \`find . -name "*.dart" -exec sed -i -e 's/\s\+$//' {} \;\`."
   exit 1
 fi
+
+# Check GN format consistency
+./ci/check_gn_format.py --dry-run --root-directory . --gn-binary "third_party/gn/gn"
